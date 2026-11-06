@@ -1,0 +1,370 @@
+{
+  "name": "Fluxo M360 | LLM AI Cloudflare Textual",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "b1743583-2345-45cc-8de4-e95944fc4001",
+      "name": "Entrada M360",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst input = $input.first()?.json;\nconst supported = [\"ar\",\"de\",\"en\",\"es\",\"fr\",\"hi\",\"ja\",\"pt\",\"ru\",\"zh\"];\nconst normalizeLanguage = value => {\n  if (typeof value !== 'string') return null;\n  const normalized = value.trim().toLowerCase().split(/[-_]/, 1)[0];\n  return supported.includes(normalized) ? normalized : null;\n};\nconst errors = [];\nif (!input || typeof input !== 'object' || Array.isArray(input)) {\n  errors.push({ field: '$', code: 'INVALID_INPUT', message: 'A entrada deve ser um objeto JSON.' });\n}\nconst text = typeof input?.texto_original === 'string' ? input.texto_original.trim() : '';\nconst source = normalizeLanguage(input?.idioma_origem);\nconst target = normalizeLanguage(input?.idioma_destino);\nif (!text) errors.push({ field: 'texto_original', code: 'REQUIRED_FIELD', message: 'texto_original deve ser uma string não vazia.' });\nif (!source) errors.push({ field: 'idioma_origem', code: 'UNSUPPORTED_LANGUAGE', message: 'Código de idioma de origem não suportado pelo piloto.' });\nif (!target) errors.push({ field: 'idioma_destino', code: 'UNSUPPORTED_LANGUAGE', message: 'Código de idioma de destino não suportado pelo piloto.' });\nif (input?.instrucoes_traducao != null && String(input.instrucoes_traducao).trim()) {\n  errors.push({ field: 'instrucoes_traducao', code: 'UNSUPPORTED_INSTRUCTIONS', message: 'O modelo especializado do piloto não aceita instruções editoriais livres.' });\n}\nif (input?.content_id != null && !['string', 'number'].includes(typeof input.content_id)) {\n  errors.push({ field: 'content_id', code: 'INVALID_FIELD', message: 'content_id deve ser string ou número quando informado.' });\n}\nconst accountId = String($env.CLOUDFLARE_ACCOUNT_ID ?? '').trim();\nif (!accountId) errors.push({ field: 'CLOUDFLARE_ACCOUNT_ID', code: 'MISSING_CONFIGURATION', message: 'CLOUDFLARE_ACCOUNT_ID não está configurado no ambiente do n8n.' });\nif (errors.length) {\n  return [{ json: {\n    _route: 'error',\n    content_id: input?.content_id == null ? null : String(input.content_id),\n    status: 'error',\n    texto_traduzido: null,\n    modelo: '@cf/meta/m2m100-1.2b',\n    erro: { codigo: 'INVALID_INPUT', categoria: 'validation', diagnostico: 'Entrada ou configuração inválida.', detalhes: errors, http_status: null, tentativas: 0, esgotou_tentativas: false }\n  }}];\n}\nreturn [{ json: {\n  _route: 'request',\n  contexto: {\n    content_id: input.content_id == null ? null : String(input.content_id),\n    tipo_conteudo: typeof input.tipo_conteudo === 'string' && input.tipo_conteudo.trim() ? input.tipo_conteudo.trim() : 'texto',\n    idioma_origem: source,\n    idioma_destino: target,\n    texto_original: text,\n    account_id: accountId,\n    modelo: '@cf/meta/m2m100-1.2b',\n    request_body: { text, source_lang: source, target_lang: target },\n    _core: { tentativa: 1, max_tentativas: 3 }\n  }\n}}];"
+      },
+      "id": "0e857f40-1f84-438d-845c-7923737b4002",
+      "name": "Validar e Preparar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bd195bbc-806c-4907-a038-acde611a4003",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "request",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "7104d8c8-d072-4a81-952c-afd4eec74004",
+      "name": "Entrada Valida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.cloudflare.com/client/v4/accounts/' + $json.contexto.account_id + '/ai/run/' + $json.contexto.modelo }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.contexto.request_body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "85aa24ef-adad-47bd-ae6d-87a405e44005",
+      "name": "Cloudflare Workers AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -300,
+        -120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Cloudflare Workers AI Bearer"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nlet context = $('Validar e Preparar').first().json.contexto;\ntry {\n  const retryContext = $('Incrementar Tentativa').last().json.contexto;\n  if (retryContext) context = retryContext;\n} catch {}\nconst response = $json ?? {};\nconst statusCode = Number(response.statusCode ?? 0);\nconst body = response.body ?? response;\nconst translated = body?.result?.translated_text;\nconst sanitize = value => String(value ?? 'Erro não detalhado.')\n  .replace(/Bearer\\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')\n  .replace(/(?:token|api[_ -]?key|authorization)\\s*[:=]\\s*[^\\s,;]+/gi, '[CREDENCIAL REDACTED]')\n  .replace(/\\s+/g, ' ').trim().slice(0, 500);\nconst message = fallback => {\n  const candidate = Array.isArray(body?.errors) ? body.errors[0] : body?.error;\n  return sanitize(candidate?.message ?? candidate ?? body?.message ?? fallback);\n};\nif (statusCode >= 200 && statusCode < 300 && body?.success !== false && typeof translated === 'string' && translated.trim()) {\n  return [{ json: { _route: 'success', contexto: context, translated_text: translated.trim(), usage: body?.result?.usage ?? body?.usage ?? null, status_code: statusCode } }];\n}\nlet error;\nif (statusCode >= 200 && statusCode < 300) error = { code: 'EMPTY_OR_INVALID_RESPONSE', category: 'response', retryable: true, diagnostic: 'A resposta não contém result.translated_text válido.' };\nelse if ([401, 403].includes(statusCode)) error = { code: 'AUTHENTICATION_FAILED', category: 'authentication', retryable: false, diagnostic: message('Autenticação recusada pela Cloudflare.') };\nelse if (statusCode === 404) error = { code: 'MODEL_UNAVAILABLE', category: 'model', retryable: false, diagnostic: message('Modelo ou endpoint não encontrado.') };\nelse if (statusCode === 429) error = { code: 'LIMIT_EXCEEDED', category: 'quota_or_rate_limit', retryable: false, diagnostic: message('Limite de uso atingido.') };\nelse if ([408, 425, 500, 502, 503, 504].includes(statusCode)) error = { code: statusCode === 408 ? 'TIMEOUT' : 'UPSTREAM_UNAVAILABLE', category: statusCode === 408 ? 'timeout' : 'upstream', retryable: true, diagnostic: message('Falha transitória na Cloudflare.') };\nelse if (statusCode >= 400) error = { code: 'CLOUDFLARE_API_ERROR', category: 'api', retryable: false, diagnostic: message('Erro retornado pela API da Cloudflare.') };\nelse error = { code: 'NETWORK_ERROR', category: 'communication', retryable: true, diagnostic: message('Falha de comunicação com a Cloudflare.') };\nconst attempt = Number(context._core?.tentativa ?? 1);\nconst maxAttempts = Number(context._core?.max_tentativas ?? 3);\nconst mayRetry = error.retryable && attempt < maxAttempts;\nreturn [{ json: {\n  _route: mayRetry ? 'retry' : 'error',\n  contexto: context,\n  ...error,\n  exhausted: error.retryable && !mayRetry,\n  status_code: statusCode || null,\n  retry_delay_seconds: mayRetry ? Math.min(2 ** attempt, 10) : null\n}}];"
+      },
+      "id": "54089327-a0a1-430d-8170-45cbe9df4006",
+      "name": "Interpretar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -60,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "15b22bac-a69d-479c-bc06-bff03c9c4007",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "3fe5a0d6-87ae-4456-8184-4920d5b34008",
+      "name": "Sucesso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        180,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nconst context = item.contexto;\nreturn [{ json: {\n  content_id: context.content_id,\n  status: 'success',\n  tipo_conteudo: context.tipo_conteudo,\n  idioma_origem: context.idioma_origem,\n  idioma_destino: context.idioma_destino,\n  texto_traduzido: item.translated_text,\n  modelo: context.modelo,\n  metricas: {\n    tentativas: context._core.tentativa,\n    caracteres_entrada: context.texto_original.length,\n    caracteres_saida: item.translated_text.length,\n    consumo_cloudflare: item.usage\n  }\n}}];"
+      },
+      "id": "07d48035-2b6a-438d-9605-39d851f34009",
+      "name": "Normalizar Sucesso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "72f2c6e0-8ff4-4a53-9ef3-83b17e0d4010",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "dfc5dcb8-3d7a-4e68-8fc7-fe5967a04011",
+      "name": "Pode Repetir?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        420,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.retry_delay_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "17925a06-3489-42ce-921f-28a5aaea4012",
+      "name": "Aguardar Backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        -40
+      ],
+      "webhookId": "0ce8ff7d-fcac-4f80-8207-9b58070c4013"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nconst context = item.contexto;\nreturn [{ json: {\n  _route: 'request',\n  contexto: {\n    ...context,\n    _core: { ...context._core, tentativa: Number(context._core.tentativa) + 1 }\n  }\n}}];"
+      },
+      "id": "09deef46-1ecb-48f4-aae6-3e46dd8a4014",
+      "name": "Incrementar Tentativa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nif (!item.contexto) return [{ json: Object.fromEntries(Object.entries(item).filter(([key]) => key !== '_route')) }];\nconst context = item.contexto;\nreturn [{ json: {\n  content_id: context.content_id,\n  status: 'error',\n  tipo_conteudo: context.tipo_conteudo,\n  idioma_origem: context.idioma_origem,\n  idioma_destino: context.idioma_destino,\n  texto_traduzido: null,\n  modelo: context.modelo,\n  erro: {\n    codigo: item.code,\n    categoria: item.category,\n    diagnostico: item.diagnostic,\n    http_status: item.status_code ?? null,\n    tentativas: context._core.tentativa,\n    esgotou_tentativas: Boolean(item.exhausted)\n  }\n}}];"
+      },
+      "id": "3153aa76-0efb-40ba-b62d-0be0b86c4015",
+      "name": "Normalizar Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Entrada M360": {
+      "main": [
+        [
+          {
+            "node": "Validar e Preparar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar e Preparar": {
+      "main": [
+        [
+          {
+            "node": "Entrada Valida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada Valida?": {
+      "main": [
+        [
+          {
+            "node": "Cloudflare Workers AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalizar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cloudflare Workers AI": {
+      "main": [
+        [
+          {
+            "node": "Interpretar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar Resposta": {
+      "main": [
+        [
+          {
+            "node": "Sucesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sucesso?": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pode Repetir?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pode Repetir?": {
+      "main": [
+        [
+          {
+            "node": "Aguardar Backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalizar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar Backoff": {
+      "main": [
+        [
+          {
+            "node": "Incrementar Tentativa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Incrementar Tentativa": {
+      "main": [
+        [
+          {
+            "node": "Cloudflare Workers AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "ee204065-a280-4056-a31e-1fd25d184016",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

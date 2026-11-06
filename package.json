@@ -1,0 +1,17 @@
+{
+  "name": "fluxo-m360-llm-ai-cloudflare-textual",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Piloto n8n de tradução editorial com Cloudflare Workers AI",
+  "scripts": {
+    "groq-workflow:check": "node scripts/generate-groq-workflow.mjs --check",
+    "groq-workflow:generate": "node scripts/generate-groq-workflow.mjs",
+    "test": "node --test",
+    "workflow:check": "node scripts/generate-workflow.mjs --check",
+    "workflow:generate": "node scripts/generate-workflow.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

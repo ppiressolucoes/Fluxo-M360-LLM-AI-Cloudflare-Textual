@@ -1,0 +1,8 @@
+{
+  "content_id": "noticia-123",
+  "Titulo": "Brasil amplia geração solar",
+  "Conteúdo": "<p>O Brasil ampliou a capacidade de geração solar.</p>",
+  "Legenda_IMG": "Parque solar. Foto: Divulgação",
+  "MSG_Prompt_User": "Traduza o título, o contexto e a legenda fornecidos para inglês americano.",
+  "MSG_Prompt_System": "Você é um tradutor editorial especializado em jornalismo do setor elétrico.\n\n1. Traduza para inglês americano: en-US.\n2. Preserve o sentido e o tom informativo.\n8. Preserve a estrutura HTML.\n9. Traduza a legenda de forma curta e natural.\n10. Preserve créditos.\n11. Entregue exclusivamente um JSON válido."
+}
