@@ -1,0 +1,679 @@
+{
+  "name": "LLM IA | Core Multiprovider Textual v3.1",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1376,
+        -240
+      ],
+      "id": "79902d7c-eea1-4ae6-beaf-75e292cf4b7f",
+      "name": "Start LLM"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// CORE LLM — NORMALIZA GEMINI\n//\n// Recebe a API selecionada pela SP e os prompts do fluxo pai.\n// Mantém o contador Gemini para cada ciclo:\n//   1. Primeira chamada: tentativa 1.\n//   2. Falha na primeira chamada: tentativa 2.\n//   3. Falha Cloudflare: inicia novo ciclo na tentativa 1.\n// ============================================================\n\n\n// ------------------------------------------------------------\n// 1. Recupera a API retornada pela procedure\n// ------------------------------------------------------------\n\nconst items = $input.all();\n\nlet api = items[0]?.json;\n\n// A procedure pode retornar a linha dentro de um array.\nif (Array.isArray(api)) {\n  api = api[0];\n}\n\nif (!api?.dsc_api_key) {\n  throw new Error('CORE LLM: API Key Gemini não encontrada.');\n}\n\nif (!api?.dsc_url_servico) {\n  throw new Error('CORE LLM: modelo Gemini não encontrado.');\n}\n\n\n// ------------------------------------------------------------\n// 2. Recupera e valida os prompts do fluxo pai\n// ------------------------------------------------------------\n\nconst entrada = $('Start LLM').first().json;\n\nconst system = String(\n  entrada.MSG_Prompt_System ?? ''\n).trim();\n\nconst user = String(\n  entrada.MSG_Prompt_User ?? ''\n).trim();\n\nif (!system || !user) {\n  throw new Error(\n    'CORE LLM: prompts obrigatórios não recebidos.'\n  );\n}\n\n\n// ------------------------------------------------------------\n// 3. Normaliza o nome do modelo Gemini\n// ------------------------------------------------------------\n\nconst modelo = String(api.dsc_url_servico)\n  .replace(/^models\\//, '')\n  .trim();\n\nif (!modelo) {\n  throw new Error('CORE LLM: modelo Gemini inválido.');\n}\n\n\n// ------------------------------------------------------------\n// 4. Define o estado inicial do ciclo Gemini\n// ------------------------------------------------------------\n\nlet core = {\n  tentativa_gemini: 1,\n  max_tentativas_gemini: 2\n};\n\n\n// ------------------------------------------------------------\n// 5. Recupera o estado preparado após a última falha Gemini\n// ------------------------------------------------------------\n//\n// retry_gemini:\n//   CONTADOR RETRY preparou a segunda tentativa Gemini.\n//\n// fallback_cloudflare:\n//   As duas tentativas Gemini falharam. Se Normaliza voltou a\n//   executar depois disso, o retorno veio da rota Cloudflare;\n//   nesse caso, usa o novo ciclo preparado por IF RETRY.\n// ------------------------------------------------------------\n\nlet ultimoContador = null;\n\ntry {\n  ultimoContador = $('CONTADOR RETRY').last().json;\n} catch {\n  // Primeira chamada: CONTADOR RETRY ainda não executou.\n}\n\nif (ultimoContador?._route === 'retry_gemini') {\n  if (!ultimoContador._core) {\n    throw new Error(\n      'CORE LLM: contador da próxima tentativa Gemini ausente.'\n    );\n  }\n\n  core = {\n    ...core,\n    ...ultimoContador._core\n  };\n} else if (ultimoContador?._route === 'fallback_cloudflare') {\n  let retornoCloudflare;\n\n  try {\n    retornoCloudflare = $('IF RETRY').last().json;\n  } catch {\n    throw new Error(\n      'CORE LLM: retorno da Cloudflare sem contador de novo ciclo.'\n    );\n  }\n\n  if (\n    retornoCloudflare?._route !== 'retry_gemini' ||\n    !retornoCloudflare.contexto?._core\n  ) {\n    throw new Error(\n      'CORE LLM: estado do novo ciclo Gemini inválido.'\n    );\n  }\n\n  core = {\n    ...core,\n    ...retornoCloudflare.contexto._core\n  };\n}\n\n\n// ------------------------------------------------------------\n// 6. Valida o contador antes de chamar o Gemini\n// ------------------------------------------------------------\n\ncore.tentativa_gemini = Number(core.tentativa_gemini);\ncore.max_tentativas_gemini = Number(core.max_tentativas_gemini);\n\nif (\n  !Number.isInteger(core.tentativa_gemini) ||\n  !Number.isInteger(core.max_tentativas_gemini) ||\n  core.tentativa_gemini < 1 ||\n  core.max_tentativas_gemini !== 2 ||\n  core.tentativa_gemini > core.max_tentativas_gemini\n) {\n  throw new Error(\n    'CORE LLM: contador de tentativas Gemini inválido.'\n  );\n}\n\n\n// ------------------------------------------------------------\n// 7. Prepara os dados para o node HTTP Gemini\n// ------------------------------------------------------------\n\nreturn [\n  {\n    json: {\n      api_id: api.id,\n      api_key: api.dsc_api_key,\n      modelo,\n      txt_CMD_System: system,\n      txt_CMD_User: user,\n      _core: core\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -240
+      ],
+      "id": "dcbf46be-f85f-49b7-a245-58ac4ce4fcd0",
+      "name": "Normaliza"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CALL sp_get_api('gemini');",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -992,
+        -240
+      ],
+      "id": "a49b1c87-4928-4b60-8a0d-d34fc8a81d4c",
+      "name": "SP Buscar Gemini API"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first()?.json ?? {};\nconst partes = item.candidates?.[0]?.content?.parts ?? [];\nconst textoGemini = Array.isArray(partes)\n  ? partes.filter(parte => typeof parte?.text === 'string').map(parte => parte.text).join('')\n  : '';\nconst texto = typeof item.text === 'string' ? item.text.trim() : textoGemini.trim();\n\nif (!texto) throw new Error('CORE LLM: resposta textual vazia ou inválida.');\n\nconst tokens = item.tokens\n  ?? item.usage?.total_tokens\n  ?? item.usage?.totalTokens\n  ?? item.usageMetadata?.totalTokenCount\n  ?? null;\n\nreturn [{\n  json: {\n    text: texto,\n    modelo: item.modelo ?? item.modelVersion ?? null,\n    tokens,\n    provedor: item.provedor ?? 'gemini',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -256
+      ],
+      "id": "7e8ab275-29c5-4c44-b0cb-8acbd66f2542",
+      "name": "Normaliza Resposta LLM"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => ({\n  json: {\n    ...item.json,\n\n    _core: {\n      tentativa: 1,\n      max_tentativas: 2\n    }\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        -240
+      ],
+      "id": "11f4475f-3d24-464d-9811-25d374120fd3",
+      "name": "INI CORE"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recupera a falha e a configuração Gemini desta tentativa.\nconst erro = $('Interpretar Gemini').last().json;\nconst gemini = $('Normaliza').last().json;\nconst entrada = $('Start LLM').first().json;\n\nconst tentativaAtual = Number(gemini._core?.tentativa_gemini ?? 1);\nconst maxTentativas = 2;\n\nif (!Number.isInteger(tentativaAtual) || tentativaAtual < 1) {\n  throw new Error('CORE LLM: contador Gemini inválido.');\n}\n\n// Após a primeira falha, libera a segunda tentativa.\n// Após a segunda falha, encaminha para a Cloudflare.\nconst tentarGeminiNovamente = tentativaAtual < maxTentativas;\n\nreturn [{\n  json: {\n    _route: tentarGeminiNovamente\n      ? 'retry_gemini'\n      : 'fallback_cloudflare',\n\n    api_id_gemini: erro.api_id ?? null,\n    erro_gemini: erro.erro ?? 'Falha Gemini sem diagnóstico.',\n\n    MSG_Prompt_System: entrada.MSG_Prompt_System,\n    MSG_Prompt_User: entrada.MSG_Prompt_User,\n\n    _core: {\n      tentativa_gemini: tentarGeminiNovamente\n        ? tentativaAtual + 1\n        : tentativaAtual,\n      max_tentativas_gemini: maxTentativas\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        0
+      ],
+      "id": "8f5c9254-2b31-49ee-8e76-6d2122271874",
+      "name": "CONTADOR RETRY"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recebe o erro produzido pela chamada Cloudflare.\nconst item = $input.first()?.json ?? {};\nconst contexto = item.contexto;\nconst core = contexto?._core;\n\n// Confirma que este node foi acionado pelo caminho esperado.\nif (item.provedor !== 'cloudflare' || item._route !== 'error') {\n  throw new Error(\n    'CORE LLM: entrada fora da rota de falha Cloudflare.'\n  );\n}\n\nif (!contexto || !core) {\n  throw new Error(\n    'CORE LLM: contexto de tentativas ausente.'\n  );\n}\n\n// Cada novo ciclo começa com duas tentativas Gemini disponíveis.\nconst maxTentativasGemini = 2;\n\nreturn [\n  {\n    json: {\n      ...item,\n\n      // Identifica o retorno ao fluxo Gemini.\n      _route: 'retry_gemini',\n\n      contexto: {\n        ...contexto,\n\n        _core: {\n          ...core,\n\n          // Reinicia o contador para o novo ciclo.\n          tentativa_gemini: 1,\n          max_tentativas_gemini: maxTentativasGemini,\n\n          ultimo_provedor: 'cloudflare',\n          motivo_retorno: 'falha_cloudflare',\n\n          // Mantém somente informações úteis para diagnóstico.\n          ultimo_erro_cloudflare: {\n            codigo: item.code ?? null,\n            http_status: item.status_code ?? null\n          }\n        }\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        304
+      ],
+      "id": "e9582c81-78fb-4d92-be2e-8b6872467e8b",
+      "name": "IF RETRY"
+    },
+    {
+      "parameters": {
+        "content": "##  LLM IA | FLASH GEMINI COM PROXY",
+        "height": 240,
+        "width": 800
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1056,
+        -304
+      ],
+      "typeVersion": 1,
+      "id": "62b2b4e0-b0cb-487a-8602-81baf110e5f7",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "##  LLM IA | WORKER CLOUDFLARE",
+        "height": 240,
+        "width": 752,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1008,
+        224
+      ],
+      "typeVersion": 1,
+      "id": "ae54154c-8522-4fc9-82a6-e4aafaddd23f",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.cloudflare.com/client/v4/accounts/' + $json.contexto.account_id + '/ai/run/' + $json.contexto.modelo }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.contexto.api_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.contexto.request_body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "7090edcb-b537-4d22-b3c8-ec980ce6f21f",
+      "name": "Cloudflare Workers AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -608,
+        288
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CALL sp_get_api('cloudflare');",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -976,
+        288
+      ],
+      "id": "30dfab1f-7723-4644-b0b9-d6a602e9e49c",
+      "name": "SP | Buscar API-KEY Cloudflare"
+    },
+    {
+      "parameters": {
+        "jsCode": "function encontrarRegistro(valor, profundidade = 0) {\n  if (profundidade > 6 || valor == null || typeof valor !== 'object') return null;\n  if (!Array.isArray(valor) && Object.prototype.hasOwnProperty.call(valor, 'dsc_api_key')) return valor;\n  for (const item of Object.values(valor)) {\n    const registro = encontrarRegistro(item, profundidade + 1);\n    if (registro) return registro;\n  }\n  return null;\n}\n\nconst api = encontrarRegistro($input.all().map(item => item.json));\nif (!api || api.id == null) throw new Error('CORE Cloudflare: nenhuma conta disponível na SP.');\n\nconst accountId = String(api.dsc_api_key ?? '').trim();\nconst apiToken = String(api.dsc_api_secret ?? '').trim();\nif (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error('CORE Cloudflare: Account ID ausente ou inválido no cadastro.');\nif (!apiToken) throw new Error('CORE Cloudflare: token ausente no cadastro.');\n\nconst entrada = $('Start LLM').first().json;\nconst system = String(entrada.MSG_Prompt_System ?? '').trim();\nconst user = String(entrada.MSG_Prompt_User ?? '').trim();\nif (!system || !user) throw new Error('CORE Cloudflare: prompts de entrada ausentes.');\n\nlet core = { tentativa_gemini: 1, max_tentativas_gemini: 5 };\ntry {\n  const anterior = $('IF RETRY').last().json.contexto?._core;\n  if (anterior) core = { ...core, ...anterior };\n} catch {}\n\nreturn [{\n  json: {\n    contexto: {\n      account_id: accountId,\n      api_id: api.id,\n      api_token: apiToken,\n      modelo: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',\n      request_body: {\n        messages: [\n          { role: 'system', content: system },\n          { role: 'user', content: user },\n        ],\n        max_tokens: (() => { const value = Number($('Start LLM').first().json.MSG_Max_Tokens); return Number.isInteger(value) && value > 0 ? value : 2048; })(),\n        stream: false,\n      },\n      _core: core,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        288
+      ],
+      "id": "acba181e-5db7-4029-837b-4892d7b3f70e",
+      "name": "Preparar Conta Cloudflare"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://n8n-gemini-proxy.core360.workers.dev/v1beta/models/' + $json.modelo + ':generateContent' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $json.api_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Proxy-Key",
+              "value": "CONFIGURAR_CREDENCIAL_PROXY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  \"system_instruction\": {\n    \"parts\": [\n      {\n        \"text\": $json.txt_CMD_System\n      }\n    ]\n  },\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": $json.txt_CMD_User\n        }\n      ]\n    }\n  ]\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -608,
+        -240
+      ],
+      "id": "a4d831f0-eae3-4a9b-8d0f-c3f78b9f4661",
+      "name": "Gemini IA | Proxy Indireto",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "15b22bac-a69d-479c-bc06-bff03c9c4007",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8e8fb1db-1d12-4466-abac-acab48396876",
+      "name": "IF | Sucesso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -160,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json ?? {};\nconst gemini = $('Normaliza').first().json;\nconst candidates = payload.candidates ?? payload.body?.candidates ?? [];\nconst parts = candidates[0]?.content?.parts ?? [];\nconst texto = parts.map(p => p?.text ?? '').join('').trim();\nconst rawErro = payload.error?.message ?? payload.error ?? payload.message ?? payload.body?.error?.message ?? '';\nconst sucesso = !rawErro && texto.length > 0;\nconst statusCode = Number(payload.statusCode ?? payload.status ?? payload.error?.code ?? payload.error?.statusCode ?? payload.error?.httpCode ?? 0) || null;\nreturn [{ json: { ...payload, _route: sucesso ? 'success' : 'error', api_id: gemini.api_id, provedor: 'gemini', fallback_provedor: 'cloudflare', modelo: gemini.modelo ?? null, text: sucesso ? texto : '', tokens: payload.usageMetadata?.totalTokenCount ?? null, status_code: statusCode, erro: sucesso ? null : String(rawErro || 'Gemini retornou resposta vazia ou sem candidates válidos.').trim().slice(0, 1000), execution_id: $execution.id, timestamp: $now.toISO(), alerta_tipo: sucesso ? null : 'gemini_fallback' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -240
+      ],
+      "id": "beec4e82-028e-4d63-b335-4ff5429fcd34",
+      "name": "Interpretar Gemini"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "593741a5-b8fd-4987-b70f-17c27d82ef2f",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        -160,
+        -240
+      ],
+      "id": "436c4006-c6d7-444a-a9d7-6162652862ea",
+      "name": "IF Gemini Sucesso?"
+    },
+    {
+      "parameters": {
+        "sendTo": "CONFIGURAR_DESTINATARIO",
+        "subject": "=[M360] Fallback Gemini → Cloudflare | Execução {{ $json.execution_id ?? $execution.id }}",
+        "message": "=<h2>Fallback Gemini → Cloudflare iniciado</h2><p>A chamada primária Gemini falhou e o CORE iniciou a contingência pelo Cloudflare Workers AI.</p><ul><li><b>Modelo Gemini:</b> {{ $json.modelo ?? 'n/d' }}</li><li><b>Provedor alternativo:</b> {{ $json.fallback_provedor ?? 'cloudflare' }}</li><li><b>Status HTTP:</b> {{ $json.status_code ?? 'n/d' }}</li><li><b>ID da execução:</b> {{ $json.execution_id ?? $execution.id }}</li><li><b>Horário:</b> {{ $json.timestamp ?? $now.toISO() }}</li><li><b>Erro:</b> {{ String($json.erro ?? 'n/d').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') }}</li></ul>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -160,
+        16
+      ],
+      "id": "314d4714-b84f-4234-896c-95c5ec462fc2",
+      "name": "Alerta | Monitora",
+      "webhookId": "b785c9ab-a879-4ca2-ac8f-18aa5b2c8899",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "7eecb1e2-b6ae-4921-8ecf-852633d6df75",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "retry_gemini",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        -368,
+        0
+      ],
+      "id": "a5bedefd-1c06-489b-8b17-5f25664a76a2",
+      "name": "IF | Tenta Gemini?"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "table": {
+          "__rl": true,
+          "value": "Config_API_IA",
+          "mode": "list",
+          "cachedResultName": "Config_API_IA",
+          "cachedResultUrl": ""
+        },
+        "dataMode": "defineBelow",
+        "columnToMatchOn": "id",
+        "valueToMatchOn": "={{ $json.api_id }}",
+        "valuesToSend": {
+          "values": [
+            {
+              "column": "dth_bloqueio_ate",
+              "value": "={{ $now.plus({ minutes: 60 }).format('yyyy-MM-dd HH:mm:ss') }}"
+            },
+            {
+              "column": "dsc_status",
+              "value": "=Erro: {{ $json.erro }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        0
+      ],
+      "id": "92fd07a0-0485-4ce0-9495-bd5ed5ff2670",
+      "name": "Congela API - Gemini"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "table": {
+          "__rl": true,
+          "value": "Config_API_IA",
+          "mode": "list",
+          "cachedResultName": "Config_API_IA",
+          "cachedResultUrl": ""
+        },
+        "dataMode": "defineBelow",
+        "columnToMatchOn": "id",
+        "valueToMatchOn": "={{ $json.contexto.api_id }}",
+        "valuesToSend": {
+          "values": [
+            {
+              "column": "dth_bloqueio_ate",
+              "value": "={{ $now.plus({ minutes: 60 }).format('yyyy-MM-dd HH:mm:ss') }}"
+            },
+            {
+              "column": "dsc_status",
+              "value": "=Erro: {{ $json.code }} | {{ $json.diagnostic }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        304,
+        368
+      ],
+      "id": "2bc899d6-a1b4-47a2-9835-12291a856fd0",
+      "name": "Congela API - Cloudflare"
+    },
+    {
+      "parameters": {
+        "jsCode": "const contexto = $('Preparar Conta Cloudflare').last().json.contexto;\nconst response = $json ?? {};\nconst status = Number(response.statusCode ?? 0);\nconst body = response.body ?? response;\nconst result = body?.result ?? {};\nconst text = typeof result.response === 'string' ? result.response.trim() : '';\n\nif (status >= 200 && status < 300 && body.success !== false && text) {\n  return [{\n    json: {\n      _route: 'success',\n      provedor: 'cloudflare',\n      contexto,\n      text,\n      modelo: contexto.modelo,\n      usage: result.usage ?? null,\n    },\n  }];\n}\n\nlet code;\nif (status === 429) code = 'LIMIT_EXCEEDED';\nelse if (status === 401 || status === 403) code = 'AUTHENTICATION_FAILED';\nelse if (status === 404) code = 'MODEL_UNAVAILABLE';\nelse if ([408, 425, 500, 502, 503, 504].includes(status) || status === 0) code = 'UPSTREAM_UNAVAILABLE';\nelse if (status >= 200 && status < 300) code = 'INVALID_RESPONSE';\nelse if (status >= 400) code = 'CLOUDFLARE_API_ERROR';\nelse code = 'COMMUNICATION_ERROR';\n\nreturn [{\n  json: {\n    _route: 'error',\n    provedor: 'cloudflare',\n    contexto,\n    code,\n    status_code: status || null,\n    diagnostic: 'Falha na chamada Cloudflare Workers AI.',\n  },\n}];"
+      },
+      "id": "8b707dd7-2859-4a18-ab45-abf52d373ff3",
+      "name": "Interpretar Worker Cloudflare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        288
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start LLM": {
+      "main": [
+        [
+          {
+            "node": "INI CORE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SP Buscar Gemini API": {
+      "main": [
+        [
+          {
+            "node": "Normaliza",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normaliza": {
+      "main": [
+        [
+          {
+            "node": "Gemini IA | Proxy Indireto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INI CORE": {
+      "main": [
+        [
+          {
+            "node": "SP Buscar Gemini API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CONTADOR RETRY": {
+      "main": [
+        [
+          {
+            "node": "IF | Tenta Gemini?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF RETRY": {
+      "main": [
+        [
+          {
+            "node": "Congela API - Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cloudflare Workers AI": {
+      "main": [
+        [
+          {
+            "node": "Interpretar Worker Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SP | Buscar API-KEY Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "Preparar Conta Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Conta Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "Cloudflare Workers AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini IA | Proxy Indireto": {
+      "main": [
+        [
+          {
+            "node": "Interpretar Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "IF | Sucesso?": {
+      "main": [
+        [
+          {
+            "node": "Normaliza Resposta LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF RETRY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar Gemini": {
+      "main": [
+        [
+          {
+            "node": "IF Gemini Sucesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gemini Sucesso?": {
+      "main": [
+        [
+          {
+            "node": "Normaliza Resposta LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Congela API - Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerta | Monitora": {
+      "main": [
+        []
+      ]
+    },
+    "IF | Tenta Gemini?": {
+      "main": [
+        [
+          {
+            "node": "SP Buscar Gemini API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SP | Buscar API-KEY Cloudflare",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Alerta | Monitora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Congela API - Gemini": {
+      "main": [
+        [
+          {
+            "node": "CONTADOR RETRY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Congela API - Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "SP Buscar Gemini API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar Worker Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "IF | Sucesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

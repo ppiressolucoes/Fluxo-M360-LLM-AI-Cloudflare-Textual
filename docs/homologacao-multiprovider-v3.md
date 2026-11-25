@@ -21,5 +21,5 @@ O usuário considerou a evolução homologada. Os totais observados são compat�
 
 - A lógica atual permite voltar ao Gemini após falha Cloudflare; não foi confirmado um limite total de ciclos. Falhas persistentes em ambos os provedores podem prolongar a execução e repetir alertas.
 - Não foi validada a qualidade factual do texto gerado em comparação com a fonte. A homologação relatada corresponde ao comportamento do fluxo.
-- O código final publicado no n8n não foi reexportado para esta consolidação. Antes de substituir ou restaurar o fluxo, obtenha um export atualizado e remova credenciais literais e dados de execução.
+- O export v3.1 fornecido posteriormente está em [cópia sanitizada e inativa](../workflows/llm-core-multiprovider-textual-v3.1-sanitizado.json). Foram removidos dados fixados, referências de credenciais, identificadores de workflow e destinatário; a chave literal do proxy foi substituída por um marcador. Antes de importar, configure as credenciais MySQL e Gmail, o destinatário e `X-Proxy-Key` por mecanismo seguro. A cópia é uma referência para homologação e não deve substituir diretamente o fluxo publicado.
 - O limite diário de Neurons é por conta Cloudflare; tokens diferentes da mesma conta não fornecem franquia independente.

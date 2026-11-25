@@ -113,3 +113,4 @@ O artefato Groq atualizado para o contrato do fluxo pai está em
 - [Piloto Groq com seleção pelo banco](docs/piloto-groq-banco.md)
 - [Tratamento de erros no fluxo Workers AI Prompts](docs/workers-ai-prompts-retry.md)
 - [Homologação do Core Multiprovider Textual v3.0](docs/homologacao-multiprovider-v3.md)
+- [Export sanitizado do Core Multiprovider Textual v3.1](workflows/llm-core-multiprovider-textual-v3.1-sanitizado.json)
