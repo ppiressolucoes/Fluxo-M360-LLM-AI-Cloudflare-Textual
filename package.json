@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Piloto n8n de tradução editorial com Cloudflare Workers AI",
   "scripts": {
+    "image-prompt:check": "node scripts/generate-image-prompt-workflow.mjs --check",
+    "image-prompt:generate": "node scripts/generate-image-prompt-workflow.mjs",
     "groq-workflow:check": "node scripts/generate-groq-workflow.mjs --check",
     "groq-workflow:generate": "node scripts/generate-groq-workflow.mjs",
     "test": "node --test",

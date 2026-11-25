@@ -1,0 +1,585 @@
+{
+  "name": "HML | LLM IA Cloudflare | Workers AI Textual - Prompts | Congelamento 1h",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const entrada = $input.first()?.json ?? {};\n\nconst system = typeof entrada.MSG_Prompt_System === 'string'\n  ? entrada.MSG_Prompt_System.trim()\n  : '';\n\nconst user = typeof entrada.MSG_Prompt_User === 'string'\n  ? entrada.MSG_Prompt_User.trim()\n  : '';\n\nif (!system || !user) {\n  throw new Error(\n    'CORE Cloudflare: MSG_Prompt_System e MSG_Prompt_User são obrigatórios.'\n  );\n}\n\nreturn [\n  {\n    json: {\n      _route: 'request',\n      contexto: {\n        modelo: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',\n\n        request_body: {\n          messages: [\n            {\n              role: 'system',\n              content: system\n            },\n            {\n              role: 'user',\n              content: user\n            }\n          ],\n          max_tokens: 1024,\n          stream: false\n        },\n\n        _core: {\n          tentativa: 1,\n          max_tentativas: 3\n        }\n      }\n    }\n  }\n];"
+      },
+      "id": "6bcd5e11-50b9-45bb-b6bc-c05c2aa51a31",
+      "name": "Validar e Preparar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bd195bbc-806c-4907-a038-acde611a4003",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "request",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "18561b27-f82d-4a48-bfa9-0e8855aea4dc",
+      "name": "Entrada Valida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -304,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.cloudflare.com/client/v4/accounts/' + $json.contexto.account_id + '/ai/run/' + $json.contexto.modelo }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.contexto.api_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.contexto.request_body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "7ddfa220-223e-42db-bffb-bd3a6af810d3",
+      "name": "Cloudflare Workers AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        368,
+        -48
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Use o contexto da API selecionada nesta tentativa. O fallback mantém uma\n// mensagem de erro útil caso a execução pare antes da consulta à SP.\nlet context;\ntry {\n  context = $('Preparar Conta Cloudflare').last().json.contexto;\n} catch {\n  context = $('Validar e Preparar').first().json.contexto;\n}\nif (!context) {\n  throw new Error('CORE Cloudflare: contexto da requisição não encontrado.');\n}\n\n// Normaliza a resposta completa do HTTP Request.\nconst response = $json ?? {};\nconst status = Number(response.statusCode ?? 0);\nconst body = response.body ?? response;\nconst result = body?.result;\nconst text = typeof result?.response === 'string' ? result.response.trim() : '';\n\n// Sucesso: o Workers AI devolveu texto.\nif (status >= 200 && status < 300 && body?.success !== false && text) {\n  return [{\n    json: {\n      _route: 'success',\n      contexto: context,\n      text,\n      usage: result?.usage ?? null,\n      status_code: status,\n    },\n  }];\n}\n\n// Extrai código e mensagem fornecidos pela Cloudflare.\nconst providerError = Array.isArray(body?.errors) ? body.errors[0] : body?.error;\nconst providerCode = Number(providerError?.code ?? 0);\n\n// Classifica falhas para diagnóstico e política de repetição.\nlet code = 'API_ERROR';\nif (status === 401) code = 'AUTHENTICATION_FAILED';\nelse if (status === 403) code = 'AUTHORIZATION_FAILED';\nelse if (status === 429 && providerCode === 4006) code = 'DAILY_NEURON_QUOTA_EXHAUSTED';\nelse if (status === 429) code = 'LIMIT_EXCEEDED';\nelse if (status === 404) code = 'MODEL_UNAVAILABLE';\nelse if ([408, 425].includes(status)) code = 'REQUEST_TIMEOUT';\nelse if ([500, 502, 503, 504].includes(status)) code = 'UPSTREAM_UNAVAILABLE';\nelse if (!status) code = 'NETWORK_ERROR';\nelse if (status >= 200 && status < 300) code = 'INVALID_RESPONSE';\n\n// Não devolve tokens Bearer nem mensagens ilimitadas nos dados do fluxo.\nconst diagnostic = String(\n  providerError?.message ?? body?.message ?? 'A Cloudflare retornou um erro sem diagnóstico.'\n)\n  .replace(/Bearer\\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .slice(0, 300);\n\n// Falhas de credencial, cota, rede e indisponibilidade podem tentar outra API.\nconst retryableStatuses = [401, 403, 408, 425, 429, 500, 502, 503, 504];\nconst retryable = !status || retryableStatuses.includes(status);\nconst attempt = Number(context._core?.tentativa ?? 1);\nconst maxAttempts = Number(context._core?.max_tentativas ?? 3);\nconst mayRetry = retryable && attempt < maxAttempts;\n\nreturn [{\n  json: {\n    _route: mayRetry ? 'retry' : 'error',\n    contexto: context,\n    code,\n    provider_code: providerCode || null,\n    diagnostic,\n    status_code: status || null,\n    freeze_api: [401, 403, 429].includes(status),\n    retry_delay_seconds: mayRetry ? 11 : null,\n    exhausted: retryable && !mayRetry,\n  },\n}];"
+      },
+      "id": "61c4bdf1-0626-4b16-8b76-e7089ed593d0",
+      "name": "Interpretar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "15b22bac-a69d-479c-bc06-bff03c9c4007",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "324d8ecc-ba1a-4b70-a423-1e2fb3db9506",
+      "name": "Sucesso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nreturn [{ json: { text: item.text, modelo: item.contexto.modelo, tokens: item.usage?.total_tokens ?? null } }];"
+      },
+      "id": "21a141a3-084f-48b6-aa71-01a266d74153",
+      "name": "Normalizar Sucesso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "72f2c6e0-8ff4-4a53-9ef3-83b17e0d4010",
+              "leftValue": "={{ $json._route }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c7741bf9-9804-41b5-9f60-e6f9c9bd054c",
+      "name": "Pode Repetir?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        384,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.retry_delay_seconds ?? 11 }}",
+        "unit": "seconds"
+      },
+      "id": "73fc0f20-de18-43e1-a7d3-883e4d75c480",
+      "name": "Aguardar Backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        752,
+        192
+      ],
+      "webhookId": "ddc03d88-a446-4cf5-9c00-e37af2d01318"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nconst context = item.contexto;\nif (!context || !context._core) {\n  throw new Error('CORE Cloudflare: contexto de tentativa ausente.');\n}\nconst nextAttempt = Number(context._core.tentativa ?? 1) + 1;\nconst maxAttempts = Number(context._core.max_tentativas ?? 3);\nif (nextAttempt > maxAttempts) {\n  throw new Error('CORE Cloudflare: limite de tentativas excedido.');\n}\nreturn [{\n  json: {\n    _route: 'request',\n    contexto: {\n      ...context,\n      _core: { ...context._core, tentativa: nextAttempt }\n    }\n  }\n}];"
+      },
+      "id": "2b4bcaf0-be74-4d76-a011-59d23486740b",
+      "name": "Incrementar Tentativa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\nconst status = item.status_code == null ? 'indisponível' : String(item.status_code);\nconst detail = item.diagnostic ? ' — ' + item.diagnostic : '';\nthrow new Error('CORE Cloudflare: ' + (item.code ?? 'INVALID_INPUT') + ' (HTTP ' + status + ')' + detail + '.');"
+      },
+      "id": "3b9b2c0c-aceb-4c63-9083-66b49c01eebc",
+      "name": "Normalizar Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Nenhum processamento"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        144,
+        432
+      ],
+      "id": "31dd2f57-2b94-45ef-9b61-1c8abe63b78b",
+      "name": "Stop and Error"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "57329224-3712-4f4e-9c82-31f3a7384029",
+      "name": "Start LLM",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -672,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CALL sp_get_api('cloudflare');",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -32,
+        -48
+      ],
+      "id": "fc33c0f9-8b4e-4d4d-b0f8-482de88c8fd8",
+      "name": "SP | Buscar API-KEY Cloudflare"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Localiza o registro retornado pela procedure, inclusive quando o\n// resultado do MySQL vem como arrays ou objetos aninhados.\nfunction encontrarRegistro(valor, profundidade = 0) {\n  if (profundidade > 6 || valor == null || typeof valor !== 'object') {\n    return null;\n  }\n\n  if (!Array.isArray(valor) && 'dsc_api_key' in valor) {\n    return valor;\n  }\n\n  for (const item of Object.values(valor)) {\n    const registro = encontrarRegistro(item, profundidade + 1);\n    if (registro) return registro;\n  }\n\n  return null;\n}\n\nconst itensSP = $input.all();\nconst api = encontrarRegistro(itensSP.map(item => item.json));\n\nif (!api || api.id == null) {\n  throw new Error('CORE Cloudflare: nenhuma conta disponível na SP.');\n}\n\n// Neste cadastro, confirmar que:\n// dsc_api_key    = Account ID\n// dsc_api_secret = API Token\nconst accountId = String(api.dsc_api_key ?? '').trim();\nconst apiToken = String(api.dsc_api_secret ?? '').trim();\n\nif (!/^[a-f0-9]{32}$/i.test(accountId)) {\n  throw new Error(\n    'CORE Cloudflare: Account ID ausente ou inválido no campo dsc_api_key.'\n  );\n}\n\nif (!apiToken) {\n  throw new Error(\n    'CORE Cloudflare: API Token ausente no campo dsc_api_secret.'\n  );\n}\n\n// Preserva a tentativa atual quando a execução retorna pelo retry.\nlet contexto = $('Validar e Preparar').first().json.contexto;\n\ntry {\n  const retry = $('Incrementar Tentativa').last().json.contexto;\n  if (retry) contexto = retry;\n} catch {\n  // Primeira tentativa: o node de retry ainda não foi executado.\n}\n\nreturn [\n  {\n    json: {\n      _route: 'request',\n      contexto: {\n        ...contexto,\n        account_id: accountId,\n        api_id: api.id,\n        api_token: apiToken\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        -48
+      ],
+      "id": "9f0957e9-7dea-4d2c-ac4d-820fd5469bbb",
+      "name": "Preparar Conta Cloudflare"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7441e176-dec0-412f-932d-1369c6ec3d25",
+              "leftValue": "={{ $json.freeze_api }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c82d5dd9-baa7-48d2-8384-7727b090504a",
+      "name": "Congelar Chave API?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        976,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Valida o identificador numérico da API selecionada antes do UPDATE.\nconst item = $input.first().json;\nconst id = Number(item.contexto?.api_id);\nif (!Number.isSafeInteger(id) || id <= 0) {\n  throw new Error('CORE Cloudflare: api_id inválido; não foi possível congelar a chave.');\n}\nconst query = \"UPDATE Config_API_IA SET dth_bloqueio_ate = DATE_ADD(DATE_SUB(UTC_TIMESTAMP(), INTERVAL 3 HOUR), INTERVAL 1 HOUR), dsc_status = 'Bloqueada por erro Workers AI' WHERE id = \" + id;\nreturn [{ json: { ...item, _freeze_api_id: id, _freeze_query: query } }];"
+      },
+      "id": "ea7922bc-35ed-4d9c-beca-0c8d67d296ac",
+      "name": "Preparar Congelamento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json._freeze_query }}",
+        "options": {}
+      },
+      "id": "90477cb3-2352-49b8-a2b2-62853bf6efcd",
+      "name": "SP | Congelar chave por 1 hora",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        1424,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A consulta MySQL substitui o item de entrada; restaura o erro interpretado.\nconst item = $('Preparar Congelamento').last().json;\nreturn [{ json: item }];"
+      },
+      "id": "7741e415-385d-46cf-9802-887e643c8775",
+      "name": "Restaura Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1648,
+        256
+      ]
+    }
+  ],
+  "pinData": {
+    "Start LLM": [
+      {
+        "json": {
+          "MSG_Prompt_User": "Create an image-generation prompt based on the following information.\n\nTEMA: MDIC defende divisão dos custos de baterias entre todos os geradores de energia\nCONTEXTO: MDIC defende mudanças na cobrança de geradores por bateriasO Ministério do Desenvolvimento, Indústria, Comércio e Serviços (MDIC) defendeu uma mudança\n\nReturn only the final image prompt, written entirely in English, on a single line.\nDo not include explanations, labels, quotation marks, logos, or readable text.\nDo not invent specific people, vehicles, facilities, or events that are not supported by the context.",
+          "MSG_Prompt_System": "You are an AI specialized in generating prompts for realistic image generation using FLUX models.\n\nCreate a single-line prompt describing a real-world scene with high physical accuracy.\n\nRULES:\n- Use natural, descriptive language (not keyword spam)\n- Focus on real environments, materials, and lighting\n- Describe what is physically visible\n- Avoid exaggerated or cinematic terms\n- No abstract concepts or metaphors\n- No text, logos, or watermarks\n\nSTRICT RULE:\nThe image must not contain any text, letters, numbers, logos, captions, or watermarks.\nAny surfaces such as screens, signs, control panels, or labels must appear blank or without readable content.\n\nSTYLE:\n- real-world photography\n- natural lighting\n- realistic materials\n- accurate perspective and scale\n\nOUTPUT:\nReturn a single-line prompt in English."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Validar e Preparar": {
+      "main": [
+        [
+          {
+            "node": "Entrada Valida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada Valida?": {
+      "main": [
+        [
+          {
+            "node": "SP | Buscar API-KEY Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalizar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cloudflare Workers AI": {
+      "main": [
+        [
+          {
+            "node": "Interpretar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar Resposta": {
+      "main": [
+        [
+          {
+            "node": "Sucesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sucesso?": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Congelar Chave API?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pode Repetir?": {
+      "main": [
+        [
+          {
+            "node": "Aguardar Backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalizar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar Backoff": {
+      "main": [
+        [
+          {
+            "node": "Incrementar Tentativa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Incrementar Tentativa": {
+      "main": [
+        [
+          {
+            "node": "SP | Buscar API-KEY Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Erro": {
+      "main": [
+        [
+          {
+            "node": "Stop and Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start LLM": {
+      "main": [
+        [
+          {
+            "node": "Validar e Preparar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SP | Buscar API-KEY Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "Preparar Conta Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Conta Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "Cloudflare Workers AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Congelar Chave API?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Congelamento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pode Repetir?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Congelamento": {
+      "main": [
+        [
+          {
+            "node": "SP | Congelar chave por 1 hora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SP | Congelar chave por 1 hora": {
+      "main": [
+        [
+          {
+            "node": "Restaura Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restaura Erro": {
+      "main": [
+        [
+          {
+            "node": "Pode Repetir?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e614a8e6-e1b1-4921-bfa3-3bab9dcb5b27",
+  "meta": {
+    "instanceId": "9f769af33e9c8cdfc44e726022a0e6b9f585fd6f2577f3c000a6028827d25ddd"
+  },
+  "nodeGroups": [],
+  "id": "mznHbXBypNsW7HFd",
+  "tags": []
+}

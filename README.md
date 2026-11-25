@@ -13,6 +13,13 @@ Além do piloto Cloudflare, o repositório contém um
 truncadas. O workflow Cross Account recebe título, HTML, legenda e os prompts
 do fluxo pai, e monta o JSON final no próprio n8n.
 
+Para gerar prompts de imagem no fluxo `SUB3 - AI PROMPT DE IMG`, consulte o
+[subfluxo Cloudflare de prompt de imagem](docs/prompt-imagem-cloudflare.md).
+
+Para o fluxo publicado de prompts textuais, consulte o
+[tratamento de falhas, congelamento temporário e nova tentativa](docs/workers-ai-prompts-retry.md)
+e o [artefato de homologação inativo](workflows/LLM%20IA%20Cloudflare%20_%20Workers%20AI%20Textual%20-%20Prompts%20-%20HML%20Congelamento%201h.json).
+
 ## Arquitetura
 
 ```text
@@ -104,3 +111,4 @@ O artefato Groq atualizado para o contrato do fluxo pai está em
 - [Plano e estado da homologação](docs/homologacao.md)
 - [Progresso da sprint](docs/progresso-sprint.md)
 - [Piloto Groq com seleção pelo banco](docs/piloto-groq-banco.md)
+- [Tratamento de erros no fluxo Workers AI Prompts](docs/workers-ai-prompts-retry.md)

@@ -114,3 +114,23 @@ o workflow original.
 Após a escolha da conta Cloudflare, confirmar apenas o tipo de implantação do
 n8n (`Cloud` ou `self-hosted`). Em seguida, configurar o Account ID e revisar
 o node `Entrada M360` e o node `Validar e Preparar`.
+
+## Atualização — fluxo Workers AI Prompts (25/11/2026)
+
+- O subfluxo Cloudflare para prompts de imagem foi criado; ele recebe
+  `MSG_Prompt_System` e `MSG_Prompt_User` e retorna `text`, `modelo` e `tokens`.
+- No fluxo `LLM IA Cloudflare | Workers AI Textual - Prompts`, foi configurado
+  o caminho de erro: classificar a resposta, congelar a credencial selecionada
+  por uma hora para HTTP 401/403/429, restaurar o item, decidir se há tentativa
+  disponível e retornar à SP para selecionar a próxima credencial.
+- O node `Aguardar Backoff` usa segundos e recebe 11 segundos como valor padrão,
+  alinhado com a reserva de 10 segundos da cópia documentada da SP.
+- O usuário confirmou uma execução bem-sucedida do fluxo publicado e também
+  confirmou que o congelamento da linha da API foi atualizado.
+- A execução bem-sucedida valida o caminho normal. A próxima falha elegível
+  ainda deve confirmar no ambiente n8n o ciclo completo de congelamento,
+  seleção de outra credencial e nova chamada.
+- O artefato HML versionado permanece inativo e sem credenciais MySQL vinculadas;
+  deve ser conectado apenas a uma base de homologação antes de executar.
+- Para o erro Cloudflare 4006, o limite diário de Neurons é associado à conta.
+  Rotacionar um token da mesma conta não recupera a franquia.
